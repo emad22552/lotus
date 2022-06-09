@@ -10,7 +10,7 @@ GOCC?=go
 GOVERSION:=$(shell $(GOCC) version | tr ' ' '\n' | grep go1 | sed 's/^go//' | awk -F. '{printf "%d%03d%03d", $$1, $$2, $$3}')
 ifeq ($(shell expr $(GOVERSION) \< 1016000), 1)
 $(warning Your Golang version is go$(shell expr $(GOVERSION) / 1000000).$(shell expr $(GOVERSION) % 1000000 / 1000).$(shell expr $(GOVERSION) % 1000))
-$(error Update Golang to version to at least 1.16.0)
+$(error Update Golang to version to at least 1.17.9)
 endif
 
 # git modules that need to be loaded
@@ -97,7 +97,7 @@ BINS+=lotus-miner
 
 lotus-worker: $(BUILD_DEPS)
 	rm -f lotus-worker
-	$(GOCC) build $(GOFLAGS) -o lotus-worker ./cmd/lotus-seal-worker
+	$(GOCC) build $(GOFLAGS) -o lotus-worker ./cmd/lotus-worker
 .PHONY: lotus-worker
 BINS+=lotus-worker
 
@@ -193,7 +193,7 @@ BINS+=lotus-health
 
 lotus-wallet:
 	rm -f lotus-wallet
-	$(GOCC) build -o lotus-wallet ./cmd/lotus-wallet
+	$(GOCC) build $(GOFLAGS) -o lotus-wallet ./cmd/lotus-wallet
 .PHONY: lotus-wallet
 BINS+=lotus-wallet
 
@@ -330,7 +330,7 @@ docsgen-md-storage: docsgen-md-bin
 docsgen-md-worker: docsgen-md-bin
 	./docgen-md "api/api_worker.go" "Worker" "api" "./api" > documentation/en/api-v0-methods-worker.md
 
-docsgen-openrpc: docsgen-openrpc-full docsgen-openrpc-storage docsgen-openrpc-worker
+docsgen-openrpc: docsgen-openrpc-full docsgen-openrpc-storage docsgen-openrpc-worker docsgen-openrpc-gateway
 
 docsgen-openrpc-full: docsgen-openrpc-bin
 	./docgen-openrpc "api/api_full.go" "FullNode" "api" "./api" -gzip > build/openrpc/full.json.gz
@@ -338,12 +338,16 @@ docsgen-openrpc-storage: docsgen-openrpc-bin
 	./docgen-openrpc "api/api_storage.go" "StorageMiner" "api" "./api" -gzip > build/openrpc/miner.json.gz
 docsgen-openrpc-worker: docsgen-openrpc-bin
 	./docgen-openrpc "api/api_worker.go" "Worker" "api" "./api" -gzip > build/openrpc/worker.json.gz
+docsgen-openrpc-gateway: docsgen-openrpc-bin
+	./docgen-openrpc "api/api_gateway.go" "Gateway" "api" "./api" -gzip > build/openrpc/gateway.json.gz
 
 .PHONY: docsgen docsgen-md-bin docsgen-openrpc-bin
 
 gen: actors-gen type-gen method-gen cfgdoc-gen docsgen api-gen circleci
 	@echo ">>> IF YOU'VE MODIFIED THE CLI OR CONFIG, REMEMBER TO ALSO MAKE docsgen-cli"
 .PHONY: gen
+
+jen: gen
 
 snap: lotus lotus-miner lotus-worker
 	snapcraft

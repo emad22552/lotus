@@ -26,6 +26,7 @@ import (
 	builtin4 "github.com/filecoin-project/specs-actors/v4/actors/builtin"
 	builtin5 "github.com/filecoin-project/specs-actors/v5/actors/builtin"
 	builtin6 "github.com/filecoin-project/specs-actors/v6/actors/builtin"
+	builtin7 "github.com/filecoin-project/specs-actors/v7/actors/builtin"
 
 	/* inline-gen end */
 
@@ -68,7 +69,7 @@ func TryCreateAccountActor(rt *Runtime, addr address.Address) (*types.Actor, add
 		return nil, address.Undef, aerrors.Escalate(err, "unsupported network version")
 	}
 
-	act, aerr := makeActor(av, addr)
+	act, aerr := makeAccountActor(av, addr)
 	if aerr != nil {
 		return nil, address.Undef, aerr
 	}
@@ -95,7 +96,7 @@ func TryCreateAccountActor(rt *Runtime, addr address.Address) (*types.Actor, add
 	return act, addrID, nil
 }
 
-func makeActor(ver actors.Version, addr address.Address) (*types.Actor, aerrors.ActorError) {
+func makeAccountActor(ver actors.Version, addr address.Address) (*types.Actor, aerrors.ActorError) {
 	switch addr.Protocol() {
 	case address.BLS, address.SECP256K1:
 		return newAccountActor(ver), nil
@@ -130,6 +131,8 @@ func newAccountActor(ver actors.Version) *types.Actor {
 		code = builtin5.AccountActorCodeID
 	case actors.Version6:
 		code = builtin6.AccountActorCodeID
+	case actors.Version7:
+		code = builtin7.AccountActorCodeID
 		/* inline-gen end */
 	default:
 		panic("unsupported actors version")

@@ -27,6 +27,7 @@ import (
 	"github.com/filecoin-project/lotus/metrics"
 	"github.com/filecoin-project/lotus/metrics/proxy"
 	"github.com/filecoin-project/lotus/node/impl"
+	"github.com/filecoin-project/lotus/node/impl/client"
 )
 
 var rpclog = logging.Logger("rpc")
@@ -70,6 +71,7 @@ func FullNodeHandler(a v1api.FullNode, permissioned bool, opts ...jsonrpc.Server
 	serveRpc := func(path string, hnd interface{}) {
 		rpcServer := jsonrpc.NewServer(opts...)
 		rpcServer.Register("Filecoin", hnd)
+		rpcServer.AliasMethod("rpc.discover", "Filecoin.Discover")
 
 		var handler http.Handler = rpcServer
 		if permissioned {
@@ -89,14 +91,22 @@ func FullNodeHandler(a v1api.FullNode, permissioned bool, opts ...jsonrpc.Server
 
 	// Import handler
 	handleImportFunc := handleImport(a.(*impl.FullNodeAPI))
+	handleExportFunc := handleExport(a.(*impl.FullNodeAPI))
 	if permissioned {
 		importAH := &auth.Handler{
 			Verify: a.AuthVerify,
 			Next:   handleImportFunc,
 		}
 		m.Handle("/rest/v0/import", importAH)
+
+		exportAH := &auth.Handler{
+			Verify: a.AuthVerify,
+			Next:   handleExportFunc,
+		}
+		m.Handle("/rest/v0/export", exportAH)
 	} else {
 		m.HandleFunc("/rest/v0/import", handleImportFunc)
+		m.HandleFunc("/rest/v0/export", handleExportFunc)
 	}
 
 	// debugging
@@ -105,6 +115,8 @@ func FullNodeHandler(a v1api.FullNode, permissioned bool, opts ...jsonrpc.Server
 	m.Handle("/debug/pprof-set/mutex", handleFractionOpt("MutexProfileFraction", func(x int) {
 		runtime.SetMutexProfileFraction(x)
 	}))
+	m.Handle("/health/livez", NewLiveHandler(a))
+	m.Handle("/health/readyz", NewReadyHandler(a))
 	m.PathPrefix("/").Handler(http.DefaultServeMux) // pprof
 
 	return m, nil
@@ -122,6 +134,7 @@ func MinerHandler(a api.StorageMiner, permissioned bool) (http.Handler, error) {
 	readerHandler, readerServerOpt := rpcenc.ReaderParamDecoder()
 	rpcServer := jsonrpc.NewServer(readerServerOpt)
 	rpcServer.Register("Filecoin", mapi)
+	rpcServer.AliasMethod("rpc.discover", "Filecoin.Discover")
 
 	m.Handle("/rpc/v0", rpcServer)
 	m.Handle("/rpc/streams/v0/push/{uuid}", readerHandler)
@@ -164,6 +177,34 @@ func handleImport(a *impl.FullNodeAPI) func(w http.ResponseWriter, r *http.Reque
 		err = json.NewEncoder(w).Encode(struct{ Cid cid.Cid }{c})
 		if err != nil {
 			rpclog.Errorf("/rest/v0/import: Writing response failed: %+v", err)
+			return
+		}
+	}
+}
+
+func handleExport(a *impl.FullNodeAPI) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(404)
+			return
+		}
+		if !auth.HasPerm(r.Context(), nil, api.PermWrite) {
+			w.WriteHeader(401)
+			_ = json.NewEncoder(w).Encode(struct{ Error string }{"unauthorized: missing write permission"})
+			return
+		}
+
+		var eref api.ExportRef
+		if err := json.Unmarshal([]byte(r.FormValue("export")), &eref); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		car := r.FormValue("car") == "true"
+
+		err := a.ClientExportInto(r.Context(), eref, car, client.ExportDest{Writer: w})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}

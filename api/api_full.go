@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
-	textselector "github.com/ipld/go-ipld-selector-text-lite"
 	"github.com/libp2p/go-libp2p-core/peer"
 
 	"github.com/filecoin-project/go-address"
@@ -28,7 +27,6 @@ import (
 	"github.com/filecoin-project/lotus/chain/actors/builtin/paych"
 	"github.com/filecoin-project/lotus/chain/actors/builtin/power"
 	"github.com/filecoin-project/lotus/chain/types"
-	marketevents "github.com/filecoin-project/lotus/markets/loggers"
 	"github.com/filecoin-project/lotus/node/modules/dtypes"
 	"github.com/filecoin-project/lotus/node/repo/imports"
 )
@@ -291,7 +289,7 @@ type FullNode interface {
 
 	// // UX ?
 
-	// MethodGroup: Wallet
+	// MethodGroup: WalletF
 
 	// WalletNew creates a new address in the wallet with the given sigType.
 	// Available key types: bls, secp256k1, secp256k1-ledger
@@ -352,16 +350,17 @@ type FullNode interface {
 	// ClientMinerQueryOffer returns a QueryOffer for the specific miner and file.
 	ClientMinerQueryOffer(ctx context.Context, miner address.Address, root cid.Cid, piece *cid.Cid) (QueryOffer, error) //perm:read
 	// ClientRetrieve initiates the retrieval of a file, as specified in the order.
-	ClientRetrieve(ctx context.Context, order RetrievalOrder, ref *FileRef) error //perm:admin
-	// ClientRetrieveWithEvents initiates the retrieval of a file, as specified in the order, and provides a channel
-	// of status updates.
-	ClientRetrieveWithEvents(ctx context.Context, order RetrievalOrder, ref *FileRef) (<-chan marketevents.RetrievalEvent, error) //perm:admin
+	ClientRetrieve(ctx context.Context, params RetrievalOrder) (*RestrievalRes, error) //perm:admin
+	// ClientRetrieveWait waits for retrieval to be complete
+	ClientRetrieveWait(ctx context.Context, deal retrievalmarket.DealID) error //perm:admin
+	// ClientExport exports a file stored in the local filestore to a system file
+	ClientExport(ctx context.Context, exportRef ExportRef, fileRef FileRef) error //perm:admin
 	// ClientListRetrievals returns information about retrievals made by the local client
 	ClientListRetrievals(ctx context.Context) ([]RetrievalInfo, error) //perm:write
 	// ClientGetRetrievalUpdates returns status of updated retrieval deals
 	ClientGetRetrievalUpdates(ctx context.Context) (<-chan RetrievalInfo, error) //perm:write
 	// ClientQueryAsk returns a signed StorageAsk from the specified miner.
-	ClientQueryAsk(ctx context.Context, p peer.ID, miner address.Address) (*storagemarket.StorageAsk, error) //perm:read
+	ClientQueryAsk(ctx context.Context, p peer.ID, miner address.Address) (*StorageAsk, error) //perm:read
 	// ClientCalcCommP calculates the CommP and data size of the specified CID
 	ClientDealPieceCID(ctx context.Context, root cid.Cid) (DataCIDSize, error) //perm:read
 	// ClientCalcCommP calculates the CommP for a specified file
@@ -523,8 +522,10 @@ type FullNode interface {
 	StateMarketStorageDeal(context.Context, abi.DealID, types.TipSetKey) (*MarketDeal, error) //perm:read
 	// StateLookupID retrieves the ID address of the given address
 	StateLookupID(context.Context, address.Address, types.TipSetKey) (address.Address, error) //perm:read
-	// StateAccountKey returns the public key address of the given ID address
+	// StateAccountKey returns the public key address of the given ID address for secp and bls accounts
 	StateAccountKey(context.Context, address.Address, types.TipSetKey) (address.Address, error) //perm:read
+	// StateLookupRobustAddress returns the public key address of the given ID address for non-account addresses (multisig, miners etc)
+	StateLookupRobustAddress(context.Context, address.Address, types.TipSetKey) (address.Address, error) //perm:read
 	// StateChangedActors returns all the actors whose states change between the two given state CIDs
 	// TODO: Should this take tipset keys instead?
 	StateChangedActors(context.Context, cid.Cid, cid.Cid) (map[string]types.Actor, error) //perm:read
@@ -591,6 +592,9 @@ type FullNode interface {
 	// StateGetRandomnessFromBeacon is used to sample the beacon for randomness.
 	StateGetRandomnessFromBeacon(ctx context.Context, personalization crypto.DomainSeparationTag, randEpoch abi.ChainEpoch, entropy []byte, tsk types.TipSetKey) (abi.Randomness, error) //perm:read
 
+	// StateGetNetworkParams return current network params
+	StateGetNetworkParams(ctx context.Context) (*NetworkParams, error) //perm:read
+
 	// MethodGroup: Msig
 	// The Msig methods are used to interact with multisig wallets on the
 	// filecoin network
@@ -631,9 +635,13 @@ type FullNode interface {
 	MsigApproveTxnHash(context.Context, address.Address, uint64, address.Address, address.Address, types.BigInt, address.Address, uint64, []byte) (*MessagePrototype, error) //perm:sign
 
 	// MsigCancel cancels a previously-proposed multisig message
+	// It takes the following params: <multisig address>, <proposed transaction ID> <signer address>
+	MsigCancel(context.Context, address.Address, uint64, address.Address) (*MessagePrototype, error) //perm:sign
+
+	// MsigCancel cancels a previously-proposed multisig message
 	// It takes the following params: <multisig address>, <proposed transaction ID>, <recipient address>, <value to transfer>,
 	// <sender address of the cancel msg>, <method to call in the proposed message>, <params to include in the proposed message>
-	MsigCancel(context.Context, address.Address, uint64, address.Address, types.BigInt, address.Address, uint64, []byte) (*MessagePrototype, error) //perm:sign
+	MsigCancelTxnHash(context.Context, address.Address, uint64, address.Address, types.BigInt, address.Address, uint64, []byte) (*MessagePrototype, error) //perm:sign
 
 	// MsigAddPropose proposes adding a signer in the multisig
 	// It takes the following params: <multisig address>, <sender address of the propose msg>,
@@ -686,7 +694,17 @@ type FullNode interface {
 	// MethodGroup: Paych
 	// The Paych methods are for interacting with and managing payment channels
 
-	PaychGet(ctx context.Context, from, to address.Address, amt types.BigInt) (*ChannelInfo, error)                     //perm:sign
+	// PaychGet gets or creates a payment channel between address pair
+	//  The specified amount will be reserved for use. If there aren't enough non-reserved funds
+	//    available, funds will be added through an on-chain message.
+	//  - When opts.OffChain is true, this call will not cause any messages to be sent to the chain (no automatic
+	//    channel creation/funds adding). If the operation can't be performed without sending a message an error will be
+	//    returned. Note that even when this option is specified, this call can be blocked by previous operations on the
+	//    channel waiting for on-chain operations.
+	PaychGet(ctx context.Context, from, to address.Address, amt types.BigInt, opts PaychGetOpts) (*ChannelInfo, error) //perm:sign
+	// PaychFund gets or creates a payment channel between address pair.
+	// The specified amount will be added to the channel through on-chain send for future use
+	PaychFund(ctx context.Context, from, to address.Address, amt types.BigInt) (*ChannelInfo, error)                    //perm:sign
 	PaychGetWaitReady(context.Context, cid.Cid) (address.Address, error)                                                //perm:sign
 	PaychAvailableFunds(ctx context.Context, ch address.Address) (*ChannelAvailableFunds, error)                        //perm:sign
 	PaychAvailableFundsByFromTo(ctx context.Context, from, to address.Address) (*ChannelAvailableFunds, error)          //perm:sign
@@ -713,6 +731,12 @@ type FullNode interface {
 	// LOTUS_BACKUP_BASE_PATH environment variable set to some path, and that
 	// the path specified when calling CreateBackup is within the base path
 	CreateBackup(ctx context.Context, fpath string) error //perm:admin
+}
+
+type StorageAsk struct {
+	Response *storagemarket.StorageAsk
+
+	DealProtocols []string
 }
 
 type FileRef struct {
@@ -825,6 +849,10 @@ const (
 	PCHOutbound
 )
 
+type PaychGetOpts struct {
+	OffChain bool
+}
+
 type PaychStatus struct {
 	ControlAddr address.Address
 	Direction   PCHDir
@@ -842,16 +870,23 @@ type ChannelAvailableFunds struct {
 	From address.Address
 	// To is the to address of the channel
 	To address.Address
-	// ConfirmedAmt is the amount of funds that have been confirmed on-chain
-	// for the channel
+
+	// ConfirmedAmt is the total amount of funds that have been confirmed on-chain for the channel
 	ConfirmedAmt types.BigInt
 	// PendingAmt is the amount of funds that are pending confirmation on-chain
 	PendingAmt types.BigInt
+
+	// NonReservedAmt is part of ConfirmedAmt that is available for use (e.g. when the payment channel was pre-funded)
+	NonReservedAmt types.BigInt
+	// PendingAvailableAmt is the amount of funds that are pending confirmation on-chain that will become available once confirmed
+	PendingAvailableAmt types.BigInt
+
 	// PendingWaitSentinel can be used with PaychGetWaitReady to wait for
 	// confirmation of pending funds
 	PendingWaitSentinel *cid.Cid
 	// QueuedAmt is the amount that is queued up behind a pending request
 	QueuedAmt types.BigInt
+
 	// VoucherRedeemedAmt is the amount that is redeemed by vouchers on-chain
 	// and in the local datastore
 	VoucherReedeemedAmt types.BigInt
@@ -897,6 +932,7 @@ type QueryOffer struct {
 	Size                    uint64
 	MinPrice                types.BigInt
 	UnsealPrice             types.BigInt
+	PricePerByte            abi.TokenAmount
 	PaymentInterval         uint64
 	PaymentIntervalIncrease uint64
 	Miner                   address.Address
@@ -930,15 +966,14 @@ type MarketDeal struct {
 }
 
 type RetrievalOrder struct {
-	// TODO: make this less unixfs specific
-	Root                  cid.Cid
-	Piece                 *cid.Cid
-	DatamodelPathSelector *textselector.Expression
-	Size                  uint64
+	Root         cid.Cid
+	Piece        *cid.Cid
+	DataSelector *Selector
 
-	FromLocalCAR string // if specified, get data from a local CARv2 file.
-	// TODO: support offset
-	Total                   types.BigInt
+	// todo: Size/Total are only used for calculating price per byte; we should let users just pass that
+	Size  uint64
+	Total types.BigInt
+
 	UnsealPrice             types.BigInt
 	PaymentInterval         uint64
 	PaymentIntervalIncrease uint64
@@ -1081,7 +1116,7 @@ type CirculatingSupply struct {
 type MiningBaseInfo struct {
 	MinerPower        types.BigInt
 	NetworkPower      types.BigInt
-	Sectors           []builtin.SectorInfo
+	Sectors           []builtin.ExtendedSectorInfo
 	WorkerKey         address.Address
 	SectorSize        abi.SectorSize
 	PrevBeaconEntry   types.BeaconEntry

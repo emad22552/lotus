@@ -22,7 +22,8 @@ import (
 )
 
 var msgCmd = &cli.Command{
-	Name:      "msg",
+	Name:      "message",
+	Aliases:   []string{"msg"},
 	Usage:     "Translate message between various formats",
 	ArgsUsage: "Message in any form",
 	Action: func(cctx *cli.Context) error {
@@ -147,6 +148,15 @@ func printMessage(cctx *cli.Context, msg *types.Message) error {
 	}
 
 	fmt.Println("Params:", p)
+
+	if msg, err := messageFromBytes(cctx, msg.Params); err == nil {
+		fmt.Println("---")
+		color.Red("Params message:")
+
+		if err := printMessage(cctx, msg.VMMessage()); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

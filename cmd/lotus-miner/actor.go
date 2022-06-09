@@ -51,8 +51,9 @@ var actorCmd = &cli.Command{
 }
 
 var actorSetAddrsCmd = &cli.Command{
-	Name:  "set-addrs",
-	Usage: "set addresses that your miner can be publicly dialed on",
+	Name:    "set-addresses",
+	Aliases: []string{"set-addrs"},
+	Usage:   "set addresses that your miner can be publicly dialed on",
 	Flags: []cli.Flag{
 		&cli.Int64Flag{
 			Name:  "gas-limit",
@@ -257,7 +258,7 @@ var actorWithdrawCmd = &cli.Command{
 			amount = abi.TokenAmount(f)
 
 			if amount.GreaterThan(available) {
-				return xerrors.Errorf("can't withdraw more funds than available; requested: %s; available: %s", amount, available)
+				return xerrors.Errorf("can't withdraw more funds than available; requested: %s; available: %s", types.FIL(amount), types.FIL(available))
 			}
 		}
 
@@ -306,9 +307,9 @@ var actorWithdrawCmd = &cli.Command{
 				return err
 			}
 
-			fmt.Printf("Successfully withdrew %s FIL\n", withdrawn)
+			fmt.Printf("Successfully withdrew %s \n", types.FIL(withdrawn))
 			if withdrawn.LessThan(amount) {
-				fmt.Printf("Note that this is less than the requested amount of %s FIL\n", amount)
+				fmt.Printf("Note that this is less than the requested amount of %s\n", types.FIL(amount))
 			}
 		}
 
@@ -916,8 +917,8 @@ var actorProposeChangeWorker = &cli.Command{
 			return fmt.Errorf("Proposed worker address change not reflected on chain: expected '%s', found '%s'", na, mi.NewWorker)
 		}
 
-		fmt.Fprintf(cctx.App.Writer, "Worker key change to %s successfully proposed.\n", na)
-		fmt.Fprintf(cctx.App.Writer, "Call 'confirm-change-worker' at or after height %d to complete.\n", mi.WorkerChangeEpoch)
+		fmt.Fprintf(cctx.App.Writer, "Worker key change to %s successfully sent, change happens at height %d.\n", na, mi.WorkerChangeEpoch)
+		fmt.Fprintf(cctx.App.Writer, "If you have no active deadlines, call 'confirm-change-worker' at or after height %d to complete.\n", mi.WorkerChangeEpoch)
 
 		return nil
 	},

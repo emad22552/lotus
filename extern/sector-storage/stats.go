@@ -1,33 +1,64 @@
 package sectorstorage
 
 import (
+	"context"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/filecoin-project/lotus/extern/sector-storage/sealtasks"
 	"github.com/filecoin-project/lotus/extern/sector-storage/storiface"
 )
 
-func (m *Manager) WorkerStats() map[uuid.UUID]storiface.WorkerStats {
+func (m *Manager) WorkerStats(ctx context.Context) map[uuid.UUID]storiface.WorkerStats {
 	m.sched.workersLk.RLock()
-	defer m.sched.workersLk.RUnlock()
 
 	out := map[uuid.UUID]storiface.WorkerStats{}
 
-	for id, handle := range m.sched.workers {
+	cb := func(ctx context.Context, id storiface.WorkerID, handle *WorkerHandle) {
 		handle.lk.Lock()
-		out[uuid.UUID(id)] = storiface.WorkerStats{
-			Info:    handle.info,
-			Enabled: handle.enabled,
 
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+
+		tt, err := handle.workerRpc.TaskTypes(ctx)
+		var taskList []sealtasks.TaskType
+		if err != nil {
+			log.Warnw("getting worker task types in WorkerStats", "error", err)
+		} else {
+			for taskType := range tt {
+				taskList = append(taskList, taskType)
+			}
+		}
+
+		out[uuid.UUID(id)] = storiface.WorkerStats{
+			Info:       handle.Info,
+			Tasks:      taskList,
+			Enabled:    handle.Enabled,
 			MemUsedMin: handle.active.memUsedMin,
 			MemUsedMax: handle.active.memUsedMax,
 			GpuUsed:    handle.active.gpuUsed,
 			CpuUse:     handle.active.cpuUse,
+
+			TaskCounts: map[string]int{},
 		}
+
+		for tt, count := range handle.active.taskCounters {
+			out[uuid.UUID(id)].TaskCounts[tt.String()] = count
+		}
+
 		handle.lk.Unlock()
 	}
 
+	for id, handle := range m.sched.Workers {
+		cb(ctx, id, handle)
+	}
+
+	m.sched.workersLk.RUnlock()
+
+	//list post workers
+	m.winningPoStSched.WorkerStats(ctx, cb)
+	m.windowPoStSched.WorkerStats(ctx, cb)
 	return out
 }
 
@@ -48,14 +79,14 @@ func (m *Manager) WorkerJobs() map[uuid.UUID][]storiface.WorkerJob {
 
 	m.sched.workersLk.RLock()
 
-	for id, handle := range m.sched.workers {
+	for id, handle := range m.sched.Workers {
 		handle.wndLk.Lock()
 		for wi, window := range handle.activeWindows {
-			for _, request := range window.todo {
+			for _, request := range window.Todo {
 				out[uuid.UUID(id)] = append(out[uuid.UUID(id)], storiface.WorkerJob{
 					ID:      storiface.UndefCall,
-					Sector:  request.sector.ID,
-					Task:    request.taskType,
+					Sector:  request.Sector.ID,
+					Task:    request.TaskType,
 					RunWait: wi + 2,
 					Start:   request.start,
 				})
